@@ -1,0 +1,78 @@
+// api/criar-pix.js
+import { MercadoPagoConfig, Payment } from 'mercadopago';
+
+export default async function handler(req, res) {
+  // Configura os cabeçalhos de permissão (CORS)
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Método não permitido. Envie um POST.' });
+  }
+
+  try {
+    const { total, cliente, itens, orderRef } = req.body;
+
+    // Pega o token seguro das variáveis de ambiente da Vercel
+    const accessToken = process.env.MP_ACCESS_TOKEN;
+    if (!accessToken) {
+      return res.status(500).json({ error: 'Token do Mercado Pago não configurado na Vercel.' });
+    }
+
+    const client = new MercadoPagoConfig({ accessToken });
+    const payment = new Payment(client);
+
+    const nomes = (cliente.nome || 'Cliente').trim().split(' ');
+    const primeiroNome = nomes[0] || 'Cliente';
+    const sobrenome = nomes.slice(1).join(' ') || 'Consumidor';
+    const cpfLimpo = (cliente.cpf || '').replace(/\D/g, '');
+
+    const payer = {
+      email: cliente.email || 'cliente@email.com',
+      first_name: primeiroNome,
+      last_name: sobrenome,
+    };
+
+    if (cpfLimpo.length === 11) {
+      payer.identification = {
+        type: 'CPF',
+        number: cpfLimpo,
+      };
+    }
+
+    // Cria o PIX oficial no Banco Central via Mercado Pago
+    const response = await payment.create({
+      body: {
+        transaction_amount: Number(Number(total).toFixed(2)),
+        description: `Pedido #${orderRef.slice(-6)} - Maíta Dom Divino`,
+        payment_method_id: 'pix',
+        payer: payer,
+        external_reference: orderRef,
+      }
+    });
+
+    // Devolve o QR Code oficial e o Copia e Cola para o site
+    return res.status(200).json({
+      id: response.id,
+      status: response.status,
+      qr_code: response.point_of_interaction?.transaction_data?.qr_code,
+      qr_code_base64: response.point_of_interaction?.transaction_data?.qr_code_base64
+    });
+
+  } catch (error) {
+    console.error('Erro ao gerar PIX:', error);
+    return res.status(500).json({ 
+      error: 'Falha ao processar PIX no Mercado Pago',
+      detalhes: error.message 
+    });
+  }
+}
